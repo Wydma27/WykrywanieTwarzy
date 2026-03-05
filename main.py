@@ -25,6 +25,7 @@ class FaceDetectionApp:
         self.camera = None
         self.camera_active = False
         self.current_frame = None
+        self.camera_capture_counter = 0
         
         # Utwórz katalog na zdjęcia
         self.output_dir = Path("detected_faces")
@@ -82,8 +83,9 @@ class FaceDetectionApp:
         self.image_label = img_label
         
         # Prawa strona - informacje
-        right_frame = tk.Frame(main_frame, bg='white', relief=tk.SUNKEN, bd=2)
-        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=False, padx=(5, 0), width=250)
+        right_frame = tk.Frame(main_frame, bg='white', relief=tk.SUNKEN, bd=2, width=250)
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=False, padx=(5, 0))
+        right_frame.pack_propagate(False)  # Zatrzymaj rozmiar na 250px
         
         # Wyniki
         results_title = tk.Label(right_frame, text="Wyniki", bg='white',
@@ -106,7 +108,40 @@ class FaceDetectionApp:
                                     font=("Arial", 10), bg='#f0f0f0', fg='#666666')
         self.stats_label.pack(side=tk.RIGHT)
         
+        # Bind klawisza 'S' do robienia zdjęć
+        self.root.bind('s', self.on_camera_snapshot)
+        self.root.bind('S', self.on_camera_snapshot)
+        
         self.update_stats()
+    
+    def on_camera_snapshot(self, event=None):
+        """Klawisz 'S' - jak kamera jest aktywna, zrób zdjęcie"""
+        if not self.camera_active or self.current_frame is None:
+            return
+        
+        try:
+            self.camera_capture_counter += 1
+            output_path = self.output_dir / f"capture_{self.camera_capture_counter}.jpg"
+            
+            # Zapisz zdjęcie
+            cv2.imwrite(str(output_path), self.current_frame)
+            
+            # Wykryj twarze na zdjęciu
+            frame_with_faces, faces, gray = self.detector.detect_faces_from_camera(self.current_frame)
+            coords = self.detector.get_face_coordinates(faces)
+            
+            # Dodaj do bazy
+            self.db.add_detection(
+                f"capture_{self.camera_capture_counter}.jpg",
+                str(output_path),
+                len(faces),
+                coords
+            )
+            
+            messagebox.showinfo("✓ Sukces", f"Zdjęcie nr {self.camera_capture_counter} zapisane!\n\nZnalezione twarze: {len(faces)}")
+            
+        except Exception as e:
+            messagebox.showerror("Błąd", f"Nie można zapisać zdjęcia: {str(e)}")
     
     def load_image(self):
         """Wczytaj zdjęcie z dysku"""
@@ -154,84 +189,131 @@ class FaceDetectionApp:
     def toggle_camera(self):
         """Włącz/wyłącz kamerę"""
         if not self.camera_active:
-            self.camera_active = True
-            self.camera = cv2.VideoCapture(0)
-            
-            if not self.camera.isOpened():
-                messagebox.showerror("Błąd", "Nie można otworzyć kamery!")
-                self.camera_active = False
-                return
-            
-            self.status_label.config(text="Kamera: AKTYWNA")
-            threading.Thread(target=self.camera_loop, daemon=True).start()
+            try:
+                self.camera = cv2.VideoCapture(0)
+                
+                # Sprawdź czy udało się otworzyć kamerę
+                if not self.camera.isOpened():
+                    messagebox.showerror("Błąd Kamery", "Nie można otworzyć kamery!\n\nSprawdź czy:\n✓ Kamera jest podłączona\n✓ Sterowniki są zainstalowane\n✓ Żadna inna app. nie używa kamery")
+                    self.status_label.config(text="Gotowy")
+                    self.camera = None
+                    return
+                
+                # Ustaw parametry kamery
+                self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                self.camera.set(cv2.CAP_PROP_FPS, 30)
+                
+                self.camera_active = True
+                self.camera_capture_counter = 0
+                self.status_label.config(text="🔴 Kamera WŁĄCZONA (S=zdjęcie, kliknij ponownie=wyłącz)")
+                self.camera_loop()
+                
+            except Exception as e:
+                messagebox.showerror("Błąd", f"Błąd kamery:\n{str(e)}")
+                self.status_label.config(text="Gotowy")
+                self.camera = None
         else:
+            # Wyłącz kamerę
             self.camera_active = False
             if self.camera:
                 self.camera.release()
-            self.status_label.config(text="Kamera: WYŁĄCZONA")
+                self.camera = None
+            self.status_label.config(text="Gotowy")
             self.image_label.config(image='')
-            self.image_label.config(text="Kamera wyłączona")
+            self.image_label.config(text="Kamera wyłączona", fg='#888888')
+            self.results_text.config(state=tk.NORMAL)
+            self.results_text.delete(1.0, tk.END)
+            self.results_text.config(state=tk.DISABLED)
     
     def camera_loop(self):
-        """Pętla kamery"""
-        capture_counter = 0
+        """Pętla kamery - uruchom w Tkinter"""
+        if not self.camera_active or not self.camera:
+            return
         
-        while self.camera_active and self.camera:
+        try:
             ret, frame = self.camera.read()
             
             if not ret:
-                break
+                self.camera_active = False
+                messagebox.showerror("Błąd", "Nie można czytać z kamery!")
+                self.status_label.config(text="Gotowy")
+                self.camera.release()
+                self.camera = None
+                return
             
-            # Zmniejsz rozmiar dla szybszej obróbki
+            # Prosta obróbka bez zmniejszania sie - pełne rozdzielczość
             frame = cv2.resize(frame, (640, 480))
             
             # Wykryj twarze
-            frame_with_faces, faces, gray = self.detector.detect_faces_from_camera(frame)
+            try:
+                frame_with_faces, faces, gray = self.detector.detect_faces_from_camera(frame)
+            except Exception as e:
+                print(f"Błąd detekcji: {e}")
+                faces = []
+                frame_with_faces = frame
             
             # Wyświetl
-            self.current_frame = frame_with_faces
+            self.current_frame = frame_with_faces.copy()
             self.display_image(frame_with_faces)
             
-            # Jeśli znaleziono twarze, pokaż wyniki
+            # Pokaż wyniki
             if len(faces) > 0:
                 coords = self.detector.get_face_coordinates(faces)
-                self.show_results(len(faces), coords, "Kamera (live)")
+                self.show_results(len(faces), coords, "🎥 Kamera Live")
             else:
                 self.results_text.config(state=tk.NORMAL)
                 self.results_text.delete(1.0, tk.END)
-                self.results_text.insert(tk.END, "Brak wykrytych twarzy\n\nKliknij 'Zrób zdjęcie'\naby zapisać obraz")
+                self.results_text.insert(tk.END, "Brak twarzy\n\nNaciśnij 'S'\naby zapisać\nzdjęcie")
                 self.results_text.config(state=tk.DISABLED)
             
-            # Klawisz 's' - zrób zdjęcie
-            if cv2.waitKey(30) & 0xFF == ord('s'):
-                capture_counter += 1
-                output_path = self.output_dir / f"capture_{capture_counter}.jpg"
-                cv2.imwrite(str(output_path), frame_with_faces)
-                
-                # Dodaj do bazy
-                coords = self.detector.get_face_coordinates(faces)
-                self.db.add_detection(f"capture_{capture_counter}.jpg", str(output_path),
-                                     len(faces), coords)
-                
-                messagebox.showinfo("Zapis", f"Zdjęcie zapisane: {output_path}")
+            # Zaplanuj następną klatkę (33ms = ~30 FPS)
+            self.root.after(33, self.camera_loop)
+            
+        except Exception as e:
+            print(f"Błąd pętli kamery: {e}")
+            self.camera_active = False
+            self.status_label.config(text="Gotowy")
+            if self.camera:
+                self.camera.release()
+                self.camera = None
     
     def display_image(self, cv_image):
-        """Wyświetl obraz w GUI"""
-        cv_rgb = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
-        
-        # Zmień rozmiar do okna
-        h, w = cv_rgb.shape[:2]
-        aspect_ratio = w / h
-        new_w = 450
-        new_h = int(new_w / aspect_ratio)
-        
-        cv_rgb = cv2.resize(cv_rgb, (new_w, new_h))
-        
-        pil_image = Image.fromarray(cv_rgb)
-        photo = ImageTk.PhotoImage(pil_image)
-        
-        self.image_label.config(image=photo)
-        self.image_label.image = photo
+        """Wyświetl obraz w GUI - odporna na błędy"""
+        try:
+            if cv_image is None:
+                return
+            
+            # Upewnij się że obraz jest numpy array
+            if not isinstance(cv_image, type(cv_image)):
+                return
+            
+            # Konwertuj BGR na RGB
+            if len(cv_image.shape) == 3:
+                cv_rgb = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
+            else:
+                cv_rgb = cv2.cvtColor(cv_image, cv2.COLOR_GRAY2RGB)
+            
+            # Zmień rozmiar do okna
+            h, w = cv_rgb.shape[:2]
+            if h > 0 and w > 0:
+                aspect_ratio = w / h
+                new_w = 450
+                new_h = int(new_w / aspect_ratio)
+                
+                if new_h > 0 and new_w > 0:
+                    cv_rgb = cv2.resize(cv_rgb, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+            
+            # Konwertuj do PIL
+            pil_image = Image.fromarray(cv_rgb)
+            photo = ImageTk.PhotoImage(pil_image)
+            
+            # Wyświetl
+            self.image_label.config(image=photo)
+            self.image_label.image = photo
+            
+        except Exception as e:
+            print(f"[Display Error] {str(e)}")
     
     def show_results(self, num_faces, coords, source):
         """Pokaż wyniki detekcji"""
@@ -369,6 +451,19 @@ class FaceDetectionApp:
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = FaceDetectionApp(root)
-    root.mainloop()
+    try:
+        root = tk.Tk()
+        app = FaceDetectionApp(root)
+        root.mainloop()
+    except Exception as e:
+        import traceback
+        print("=" * 60)
+        print("❌ BŁĄD W APLIKACJI!")
+        print("=" * 60)
+        print(f"\nBłąd: {str(e)}")
+        print("\nSzczegóły:")
+        traceback.print_exc()
+        print("\n" + "=" * 60)
+        print("Naciśnij Enter aby zamknąć...")
+        input()
+        exit(1)
