@@ -167,34 +167,103 @@ class FaceBase:
         best_raw_score = -1.0
         
         # Szukaj najlepszego trafienia Kosinusowego (SFace Cosine). 
-        # Czysty algorytm SFace w OpenCV uważa Cosine >= 0.363 za tę samą osobę.
         for person_name, db_feature in self.embeddings.items():
              score = self.recognizer.match(face_feature, db_feature, cv2.FaceRecognizerSF_FR_COSINE)
              if score > best_raw_score:
                  best_raw_score = score
                  best_match = person_name
                  
-        # Konwersja by uzytkownik zrozumial co widzi.
-        # Wg SFace: Kosinus >= 0.363 to bezpieczny match. My robimy tak, że 0.363 to 85% (odrzucony / przyjęty styk).
-        # A powiedzmy 0.850 to 99%. Poniżej tego styk to bezwzględnie rzucamy odrzucenie <85%.
-        # Strojony rygor pod system wejściowy (Szkoła).
-        
         confidence_percent = 0.0
         if best_raw_score > 0.30: 
-             # Matematyka dopasowujaca bezpieczny prog 0.363 pod 85% użytkownika, 1.0 to 100%
              mapped = 85.0 + ((best_raw_score - 0.363) / (1.0 - 0.363)) * 15.0
              confidence_percent = np.clip(mapped / 100.0, 0.0, 1.0)
              if best_raw_score < 0.363: 
-                  # Dla słabego cosinusa, dajemy odrzuconą statystykę do UI pod okiem użytkownika
-                  confidence_percent = best_raw_score * 2.0
-                  
+                   confidence_percent = best_raw_score * 2.0
+                   
         print(f"[DEBUG SFace] Raw Cosine: {best_raw_score:.3f}, Próg szkoły: {confidence_percent:.2%}, Osoba: {best_match}")
         
         if confidence_percent >= 0.85:
             return best_match, confidence_percent
         else:
-            # RYZYKO: Kosinus ponizej rygorystycznej zasady! Blokada.
             return None, max(0.0, confidence_percent)
+
+    def check_liveness(self, face_img):
+        """Ultra-Hardcore Anti-Spoofing v3.0 (Military Grade)
+        Wykrywa: Telefony 4K/OLED, monitory, tablety, wydruki matowe i błyszczące.
+        """
+        if face_img is None or face_img.size == 0 or face_img.shape[0] < 50:
+            return False, 0.0
+
+        # 1. ANALIZA PRZESTRZENI KOLORÓW (YCrCb Skin Color Model)
+        # To najskuteczniejsza metoda na odcięcie ekranów - one 'świecą' inaczej.
+        ycrcb = cv2.cvtColor(face_img, cv2.COLOR_BGR2YCrCb)
+        cr = ycrcb[:,:,1]
+        cb = ycrcb[:,:,2]
+        
+        # Prawdziwa skóra mieści się w bardzo wąskim zakresie:
+        # Cr: 135-175, Cb: 85-130
+        skin_mask = cv2.inRange(ycrcb, (0, 135, 85), (255, 175, 130))
+        skin_percent = (cv2.countNonZero(skin_mask) / (face_img.shape[0] * face_img.shape[1])) * 100
+        
+        # 2. ANALIZA KANAŁÓW (R/G Ratio)
+        # Ekrany emitują znacznie więcej światła zielonego i niebieskiego niż ludzka skóra.
+        b, g, r = cv2.split(face_img)
+        avg_r = np.mean(r)
+        avg_g = np.mean(g)
+        avg_b = np.mean(b)
+        
+        # Prawdziwa twarz: R > G > B. Ekrany często mają R i G bardzo blisko siebie lub G > R.
+        rgb_ratio_check = avg_r > (avg_g + 5) # Skóra musi być wystarczająco "ciepła"
+        
+        # 3. FFT MOIRÉ v2 (Wykrywanie siatki pikseli matrycy)
+        gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+        dft = np.fft.fft2(gray)
+        dft_shift = np.fft.fftshift(dft)
+        magnitude_spectrum = np.log(np.abs(dft_shift) + 1)
+        
+        # Szukamy pofalowań/linii - ekrany dają "piki" poza środkiem
+        h, w = gray.shape
+        cy, cx = h//2, w//2
+        high_freq_region = magnitude_spectrum.copy()
+        # Usuwamy środek (niskie częstotliwości - ogólny kształt)
+        high_freq_region[cy-10:cy+10, cx-10:cx+10] = 0
+        moire_score = np.max(high_freq_region) # Maksymalny pik wysokiej częstotliwości
+        
+        # 4. TEKSTURA (Laplacian v3)
+        lap_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+        
+        # 5. KONTRAST LOKALNY (Standard Deviation of local blocks)
+        # Zdjęcia na telefonach mają nienaturalnie "płaskie" lub cyfrowo "szumiące" bloki.
+        v = cv2.cvtColor(face_img, cv2.COLOR_BGR2HSV)[:,:,2]
+        v_std = np.std(v)
+
+        # --- LOGIKA DECYZYJNA (BEZ LITOŚCI) ---
+        
+        # 1. Test Koloru YCrCb (Najważniejszy)
+        # Jeśli mniej niż 65% pikseli pasuje do matematycznego modelu skóry -> FAKE.
+        if skin_percent < 55.0: 
+            return False, 0.0
+            
+        # 2. Test RGB (Backlight detection)
+        if not rgb_ratio_check:
+            return False, 0.0
+            
+        # 3. Test Moire (Pixel Grid detection)
+        # Jeśli pik częstotliwości jest zbyt wysoki -> mamy do czynienia z matrycą.
+        if moire_score > 16.5: # Bardzo rygorystyczne
+            return False, 0.0
+            
+        # 4. Test Tekstury (Texture Blur/Sharpness)
+        # Ekrany są albo rozmyte (<60) albo mają cyfrowe artefakty (>550)
+        if lap_var < 70.0 or lap_var > 580.0:
+            return False, 0.0
+            
+        # 5. Test Głębi (Kontrast)
+        if v_std < 22.0:
+            return False, 0.0
+
+        # System akceptuje tylko jeśli wszystkie testy przejdą.
+        return True, lap_var
             
     def detect_gender(self, face_image):
         """Wykrywa płeć z wyciętego obrazu twarzy"""

@@ -37,13 +37,11 @@ class AccessControlSimple:
         self.current_frame = None
         self.access_log = []
         
-        # Tracking wyników skanowania
-        self.last_scan_result = None
-        self.last_scan_time = 0
+        # Tracking wyników skanowania (Wsparcie dla wielu osób)
+        self.last_scan_times = {} # {imię: timestamp}
+        self.last_unknown_time = 0
         self.frame_count = 0
-        self.cached_name = None
-        self.cached_confidence = 0.0
-        self.cached_gender = "?"
+        self.detected_faces_results = [] # Lista słowników [{name, confidence, gender, box}]
         
         self.setup_ui()
         
@@ -267,7 +265,7 @@ class AccessControlSimple:
         self.scan_loop()
     
     def scan_loop(self):
-        """Zoptymalizowana pętla skanowania - wysoka płynność obrazu"""
+        """Zoptymalizowana pętla skanowania - wsparcie dla wielu osób na raz"""
         if not self.camera_active or not self.camera:
             return
         
@@ -282,86 +280,138 @@ class AccessControlSimple:
         self.frame_count += 1
         
         # 2. Ciężka analityka AI tylko co 3 klatki (oszczędność procesora)
-        # Przy 30 FPS, analiza odbywa się 10 razy na sekundę - wystarczająco by być "natychmiastowym"
         if self.frame_count % 3 == 0:
+            new_results = []
             try:
-                # Mały obraz do detektora (YuNet jest super szybki przy małej skali)
+                # Mały obraz do detektora
                 small_frame = cv2.resize(frame, (320, 240))
                 faces, _ = self.face_base.detect_faces(small_frame)
                 
-                if len(faces) > 0:
-                    # Przelicz współrzędne z małego obrazu na display_frame
-                    fx, fy, fw, fh = faces[0]
-                    scale_w = 640 / 320
-                    scale_h = 480 / 240
+                scale_w = 640 / 320
+                scale_h = 480 / 240
+
+                for (fx, fy, fw, fh) in faces:
                     x, y, w, h = int(fx*scale_w), int(fy*scale_h), int(fw*scale_w), int(fh*scale_h)
                     
+                    # YuNet może dać współrzędne poza obrazem po skalowaniu
+                    x, y = max(0, x), max(0, y)
+                    h_img, w_img = display_frame.shape[:2]
+                    w = min(w, w_img - x)
+                    h = min(h, h_img - y)
+                    
+                    if w < 10 or h < 10: continue
+
                     face_crop = display_frame[y:y+h, x:x+w].copy()
                     
-                    # Rozpoznaj
-                    self.cached_name, self.cached_confidence = self.face_base.recognize_face(face_crop)
-                    self.cached_gender = self.face_base.detect_gender(face_crop)
+                    # --- NOWOŚĆ: Sprawdź czy to żywa osoba (Liveness check) ---
+                    is_real, live_score = self.face_base.check_liveness(face_crop)
                     
-                    if self.cached_name:
-                        # Logika otwarcia z cooldownem
-                        if self.last_scan_result != self.cached_name or (current_time - self.last_scan_time > 5):
-                            self.last_scan_result = self.cached_name
-                            self.last_scan_time = current_time
-                            self.log_access(self.cached_name, "PRZYZNANY")
-                            self.show_access_result(True, self.cached_name, self.cached_confidence, self.cached_gender)
+                    if not is_real:
+                        # Wykryto próbę oszustwa (zdjęcie/ekran)
+                        name = "SPOOF (FAŁSZYWKA)"
+                        confidence = 0.0
+                        gender = "?"
                     else:
-                        if self.last_scan_result != "unknown" or (current_time - self.last_scan_time > 4):
-                            self.last_scan_result = "unknown"
-                            self.last_scan_time = current_time
+                        # Rozpoznaj tylko jeśli twarz jest prawdziwa
+                        name, confidence = self.face_base.recognize_face(face_crop)
+                        gender = self.face_base.detect_gender(face_crop)
+                    
+                    result = {
+                        "name": name,
+                        "confidence": confidence,
+                        "gender": gender,
+                        "box": (x, y, w, h),
+                        "is_real": is_real
+                    }
+                    new_results.append(result)
+
+                    if is_real and name:
+                        # Logika otwarcia z cooldownem na osobę
+                        last_time = self.last_scan_times.get(name, 0)
+                        if current_time - last_time > 5:
+                            self.last_scan_times[name] = current_time
+                            self.log_access(name, "PRZYZNANY")
+                            self.show_access_result(True, name, confidence, gender)
+                    elif not is_real:
+                        # Alert o spoofingu w logach
+                        if current_time - self.last_unknown_time > 4:
+                            self.last_unknown_time = current_time
+                            self.log_access("PRÓBA OSZUSTWA", "BLOKADA (SPOOF)")
+                            self.status_bar.configure(text="⚠️ ALERT: Wykryto próbę użycia zdjęcia/telefonu!", text_color="#FF9E33")
+                    else:
+                        # Cooldown dla nieznanych
+                        if current_time - self.last_unknown_time > 4:
+                            self.last_unknown_time = current_time
                             self.log_access("Osoba Nieznana", "ODMOWA")
-                            self.show_access_result(False, "NIE MA W BAZIE DANYCH", self.cached_confidence, self.cached_gender)
-                else:
-                    if current_time - self.last_scan_time > 2:
-                        self.last_scan_result = None
-                        self.cached_name = None
-            except:
+                            self.show_access_result(False, "NIE MA W BAZIE", confidence, gender)
+                
+                self.detected_faces_results = new_results
+            except Exception as e:
+                print(f"Błąd analizy: {e}")
                 pass
 
-        # 3. Rysowanie nakładek na podstawie cache'u (zapewnia 60 FPS wizualnie)
-        if self.cached_name or (self.last_scan_result == "unknown"):
-            # Pobierz współrzędne twarzy ponownie by ramka nie "skakała" (prosta detekcja co klatkę)
-            # Dla ultra-płynności rysujemy ramkę tam gdzie system AI pamięta twarz
-            try:
-                faces_fast, _ = self.face_base.detect_faces(cv2.resize(display_frame, (320, 240)))
-                if len(faces_fast) > 0:
-                    fx, fy, fw, fh = faces_fast[0]
-                    x, y, w, h = int(fx*2), int(fy*2), int(fw*2), int(fh*2)
-                    
-                    if self.cached_name:
-                        color = (130, 255, 130)
-                        cv2.rectangle(display_frame, (x, y), (x+w, y+h), color, 2)
-                        cv2.rectangle(display_frame, (x, y-30), (x+w, y), color, -1)
-                        cv2.putText(display_frame, f"{self.cached_name}", (x+5, y-8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 2)
-                    else:
-                        color = (0, 0, 255)
-                        cv2.rectangle(display_frame, (x, y), (x+w, y+h), color, 2)
-                        cv2.rectangle(display_frame, (x, y-30), (x+w, y), color, -1)
-                        cv2.putText(display_frame, "BLOKADA", (x+5, y-8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
-            except:
-                pass
+        # 3. Rysowanie nakładek na podstawie cache'u
+        try:
+            for res in self.detected_faces_results:
+                name = res["name"]
+                conf = res["confidence"]
+                x, y, w, h = res["box"]
+                is_real = res.get("is_real", True)
+                
+                if not is_real:
+                    color = (51, 158, 255) # Pomarańczowy (BGR: 255, 158, 51)
+                    label = "SPOOF / FOTO"
+                    text_color = (255, 255, 255)
+                elif name:
+                    color = (130, 255, 130) # Jasnozielony
+                    label = f"{name} {conf:.0%}"
+                    text_color = (0, 0, 0)
+                else:
+                    color = (0, 0, 255) # Czerwony
+                    label = "ODRZUCENIE"
+                    text_color = (255, 255, 255)
+                
+                cv2.rectangle(display_frame, (x, y), (x+w, y+h), color, 2)
+                cv2.rectangle(display_frame, (x, y-30), (x+w, y), color, -1)
+                cv2.putText(display_frame, label, (x+5, y-8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
+
+            if len(self.detected_faces_results) > 1:
+                # Informacja o wielu osobach
+                count = len(self.detected_faces_results)
+                self.status_bar.configure(text=f"➔ Wykryto osób: {count}. Trwa identyfikacja...", text_color="#89B4FA")
+
+        except Exception as e:
+            print(f"Błąd rysowania: {e}")
+            pass
         
         self.current_frame = display_frame
         self.display_camera(display_frame)
-        # Skrócony czas oczekiwania dla wyższego FPS UI
         self.root.after(10, self.scan_loop)
     
     def show_access_result(self, allowed, person_name, confidence, gender="?"):
-        """Pokaż wynik na UI (Nieblokujące dla płynności szkoły)"""
+        """Pokaż wynik na UI (Z personalizacją dla Kierownika)"""
         if allowed:
-            color = "#A6E3A1" # Zielony
-            status_msg = f"✅ WEJDŹ: {person_name} ({gender}) - {confidence:.0%}"
+            # --- SPECJALNE POWITANIE DLA KIEROWNIKA ---
+            if person_name == "Paweł Łaba":
+                color = "#F9E2AF" # Złoty / Żółty
+                status_msg = f"👑 WITAMY KIEROWNIKU! (Płeć: {gender}) 👑"
+            else:
+                color = "#A6E3A1" # Zielony
+                status_msg = f"✅ WEJDŹ: {person_name} ({gender}) - {confidence:.0%}"
+            
             self.status_bar.configure(text=status_msg, text_color=color)
             
             try:
                 if platform.system() == "Windows":
                     import winsound
-                    winsound.Beep(1000, 200)
-                    winsound.Beep(1300, 200)
+                    # Bardziej "uroczysty" dźwięk dla kierownika
+                    if person_name == "Paweł Łaba":
+                        winsound.Beep(800, 150)
+                        winsound.Beep(1000, 150)
+                        winsound.Beep(1200, 300)
+                    else:
+                        winsound.Beep(1000, 200)
+                        winsound.Beep(1300, 200)
             except:
                 pass
         else:
