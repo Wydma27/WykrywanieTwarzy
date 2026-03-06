@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SENTINEL AI - Remote Station</title>
+    <style>
+        :root { 
+            --bg: #0B0B10; 
+            --surface: #16161E; 
+            --accent: #7AA2F7; 
+            --red: #F7768E; 
+            --green: #9ECE6A; 
+            --text: #A9B1D6; 
+            --border: #24283B;
+        }
+        body { 
+            background: var(--bg); 
+            color: var(--text); 
+            font-family: 'JetBrains Mono', 'Segoe UI', monospace; 
+            margin: 0; 
+            padding: 20px; 
+            display: flex;
+            justify-content: center;
+        }
+        .container { 
+            max-width: 850px; 
+            width: 100%;
+            background: var(--surface); 
+            padding: 40px; 
+            border-radius: 24px; 
+            box-shadow: 0 20px 50px rgba(0,0,0,0.7); 
+            border: 1px solid var(--border);
+            text-align: center;
+        }
+        h1 { 
+            color: var(--accent); 
+            letter-spacing: 4px; 
+            text-transform: uppercase; 
+            font-size: 22px; 
+            margin-bottom: 40px;
+            text-shadow: 0 0 10px rgba(122, 162, 247, 0.3);
+        }
+        .monitor-wrapper {
+            position: relative;
+            padding: 10px;
+            background: #000;
+            border-radius: 16px;
+            border: 2px solid var(--border);
+            line-height: 0;
+            overflow: hidden;
+            margin-bottom: 40px;
+        }
+        .monitor { 
+            width: 100%; 
+            border-radius: 8px;
+            filter: contrast(1.1) brightness(1.1);
+        }
+        .scan-line {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 2px;
+            background: rgba(122, 162, 247, 0.4);
+            box-shadow: 0 0 10px var(--accent);
+            animation: scan 3s linear infinite;
+            z-index: 10;
+        }
+        @keyframes scan { 0% { top: 0%; } 100% { top: 100%; } }
+
+        .controls { 
+            display: grid; 
+            grid-template-columns: 1fr 1fr; 
+            gap: 20px; 
+        }
+        .btn { 
+            padding: 18px; 
+            border: 1px solid rgba(255,255,255,0.1); 
+            border-radius: 12px; 
+            font-weight: bold; 
+            cursor: pointer; 
+            text-transform: uppercase; 
+            transition: all 0.3s; 
+            color: #fff;
+            font-size: 13px;
+            letter-spacing: 1px;
+        }
+        .btn:hover { filter: brightness(1.2); transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
+        .btn-blue { background: #3B4261; border-color: var(--accent); color: var(--accent); }
+        .btn-red { background: rgba(247, 118, 142, 0.1); border-color: var(--red); color: var(--red); }
+        .btn-green { background: rgba(158, 206, 106, 0.1); border-color: var(--green); color: var(--green); }
+        
+        .status-panel {
+            margin-top: 40px;
+            text-align: left;
+            border-top: 1px solid var(--border);
+            padding-top: 20px;
+        }
+        .log {
+            font-size: 11px;
+            color: #565F89;
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>[ SENTINEL REMOTE LINK ACTIVE ]</h1>
+        
+        <div class="monitor-wrapper">
+            <div class="scan-line"></div>
+            <img src="/video_feed" class="monitor" alt="LIVE STREAM">
+        </div>
+        
+        <div class="controls">
+            <button class="btn btn-blue" onclick="sendCmd('foto')">📸 WYKONAJ PRZECHWYT</button>
+            <button class="btn btn-red" onclick="sendCmd('lock')">🔒 SYSTEM LOCKDOWN</button>
+            <button class="btn btn-green" onclick="location.reload()">🔄 REFRESH FEED</button>
+            <button class="btn btn-blue" onclick="window.open('/video_feed', '_blank')">📱 FULL SCREEN</button>
+        </div>
+
+        <div class="status-panel">
+            <div class="log">> INITIALIZING ENCRYPTED TUNNEL... [OK]</div>
+            <div class="log">> CONNECTION PORT: 5000 [SECURE]</div>
+            <div class="log">> STATUS: SENTINEL V6.2 ENGINE RUNNING</div>
+        </div>
+    </div>
+
+    <script>
+        function sendCmd(action) {
+            fetch('/cmd/' + action)
+                .then(r => r.json())
+                .then(d => alert(d.msg))
+                .catch(e => alert("Błąd połączenia z bazą."));
+        }
+    </script>
+</body>
+</html>

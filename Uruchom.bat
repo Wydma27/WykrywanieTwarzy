@@ -57,30 +57,38 @@ echo ============================================================
 echo.
 echo   [1] GŁÓWNA DETEKCJA TWARZY (Wykrywanie na żywo/zdjęcia)
 echo   [2] SYSTEM KONTROLI DOSTĘPU (Rozpoznawanie osób)
-echo   [3] WYJŚCIE
+echo   [3] LOGI I HISTORIA (Logi kogoś wykryło, kiedy kto)
+echo   [4] WYJŚCIE
 echo.
 echo ============================================================
-set /p choice="Wybierz opcję [1-3]: "
+set /p choice="Wybierz opcję [1-4]: "
 
 if "%choice%"=="1" goto main_app
 if "%choice%"=="2" goto access_app
-if "%choice%"=="3" exit
+if "%choice%"=="3" goto logs_app
+if "%choice%"=="4" exit
 goto menu
 
 :main_app
 echo.
-echo [*] Uruchamianie Detekcji Twarzy...
-python main.py
-goto end
+echo [*] Uruchamianie Detekcji Twarzy w nowym oknie...
+start python main.py
+goto menu
 
 :access_app
 echo.
-echo [*] Uruchamianie Kontroli Dostępu...
-python access_simple.py
-goto end
+echo [*] Uruchamianie Kontroli Dostępu w nowym oknie...
+start python access_simple.py
+goto menu
+
+:logs_app
+echo.
+echo [*] Uruchamianie Panelu Logów w nowym oknie...
+start python logs_app.py
+goto menu
 
 :end
 echo.
-echo Aplikacja została zamknięta.
+echo Powrót do menu...
 pause
 goto menu

@@ -1,0 +1,16 @@
+RAPORT ZDARZEŃ SYSTEMU BIOMETRYCZNEGO - 2026-03-06 09:33:52.018530
+======================================================================
+CZAS                 | OSOBA                     | STATUS               | AI %  
+----------------------------------------------------------------------
+2026-03-06 08:33:47  | Jakub Wydmuch             | PRZYZNANY            | 100%
+2026-03-06 08:33:42  | Jakub Wydmuch             | PRZYZNANY            | 100%
+2026-03-06 08:33:40  | PRÓBA OSZUSTWA            | BLOKADA (SPOOF)      | 100%
+2026-03-06 08:33:36  | Jakub Wydmuch             | PRZYZNANY            | 100%
+2026-03-06 08:33:32  | Jakub Wydmuch             | PRZYZNANY            | 100%
+2026-03-06 08:33:26  | Jakub Wydmuch             | PRZYZNANY            | 100%
+2026-03-06 08:33:21  | Jakub Wydmuch             | PRZYZNANY            | 100%
+2026-03-06 08:33:16  | Jakub Wydmuch             | PRZYZNANY            | 100%
+2026-03-06 08:33:15  | PRÓBA OSZUSTWA            | BLOKADA (SPOOF)      | 100%
+2026-03-06 08:33:11  | Jakub Wydmuch             | PRZYZNANY            | 100%
+2026-03-06 08:33:06  | Jakub Wydmuch             | PRZYZNANY            | 100%
+2026-03-06 08:33:01  | Jakub Wydmuch             | PRZYZNANY            | 100%
